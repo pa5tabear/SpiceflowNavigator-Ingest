@@ -3,11 +3,13 @@ import os
 from pathlib import Path
 import subprocess
 import requests
-
-from .rss_parser import RSSParser
 import sys
-from pathlib import Path
+
+# Add current directory to path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "libs" / "common-utils"))
+
+from rss_parser import RSSParser
 from runpod_client import RunPodClient
 
 FEED_URL = "https://feeds.acast.com/public/shows/65bac3af03341c00164bf93b"
