@@ -8,7 +8,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 def load_module():
-    import scripts.chunk_and_transcribe as mod
+    import chunk_and_transcribe as mod
     return importlib.reload(mod)
 
 

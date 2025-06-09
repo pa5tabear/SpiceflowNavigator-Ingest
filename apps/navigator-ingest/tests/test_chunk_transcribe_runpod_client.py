@@ -1,10 +1,10 @@
 import sys
 from pathlib import Path
 
-# Add the project root to the path for imports
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+# Add the libs directory to the path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "libs" / "common-utils"))
 
-from libs.common_utils.runpod_client import RunPodClient
+from runpod_client import RunPodClient
 
 
 class DummyClient:
@@ -22,7 +22,7 @@ def test_chunk_transcribe_runpod_client(monkeypatch):
     dummy = DummyClient("http://api")
     monkeypatch.setenv("RUNPOD_ENDPOINT", "http://api")
     monkeypatch.setattr(
-        "libs.common_utils.runpod_client.Client", lambda endpoint, timeout=300: dummy
+        "runpod_client.Client", lambda endpoint, timeout=300: dummy
     )
     client = RunPodClient()
     result = client.transcribe("file.wav", stream=True)

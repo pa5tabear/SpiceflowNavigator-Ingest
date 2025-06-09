@@ -1,10 +1,10 @@
 import sys
 from pathlib import Path
 
-# Add the project root to the path for imports
-sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
+# Add the parent directory to the path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from apps.navigator_ingest.rss_parser import RSSParser
+from rss_parser import RSSParser
 
 
 def test_rss_parser_extracts_audio_urls():
