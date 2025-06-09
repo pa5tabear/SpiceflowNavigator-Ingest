@@ -2,9 +2,10 @@ import sys
 from pathlib import Path
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+# Add the project root to the path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parents[4]))
 
-from spiceflow.clients.runpod_client import RunPodClient
+from libs.common_utils.runpod_client import RunPodClient
 
 
 class DummyClient:
@@ -28,7 +29,7 @@ def test_init_from_env(monkeypatch):
     dummy = DummyClient("http://api")
     monkeypatch.setenv("RUNPOD_ENDPOINT", "http://api")
     monkeypatch.setattr(
-        "spiceflow.clients.runpod_client.Client", lambda endpoint, timeout=300: dummy
+        "libs.common_utils.runpod_client.Client", lambda endpoint, timeout=300: dummy
     )
     client = RunPodClient()
     assert client.endpoint == "http://api"
@@ -38,7 +39,7 @@ def test_init_from_env(monkeypatch):
 def test_transcribe_calls_predict(monkeypatch):
     dummy = DummyClient("http://api")
     monkeypatch.setattr(
-        "spiceflow.clients.runpod_client.Client", lambda endpoint, timeout=300: dummy
+        "libs.common_utils.runpod_client.Client", lambda endpoint, timeout=300: dummy
     )
     client = RunPodClient("http://api")
     result = client.transcribe("file.wav", stream=True)

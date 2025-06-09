@@ -1,9 +1,10 @@
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
+# Add the project root to the path for imports
+sys.path.insert(0, str(Path(__file__).resolve().parents[3]))
 
-from spiceflow.clients.runpod_client import RunPodClient
+from libs.common_utils.runpod_client import RunPodClient
 
 
 class DummyClient:
@@ -21,7 +22,7 @@ def test_chunk_transcribe_runpod_client(monkeypatch):
     dummy = DummyClient("http://api")
     monkeypatch.setenv("RUNPOD_ENDPOINT", "http://api")
     monkeypatch.setattr(
-        "spiceflow.clients.runpod_client.Client", lambda endpoint, timeout=300: dummy
+        "libs.common_utils.runpod_client.Client", lambda endpoint, timeout=300: dummy
     )
     client = RunPodClient()
     result = client.transcribe("file.wav", stream=True)
