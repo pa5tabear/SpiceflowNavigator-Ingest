@@ -1,15 +1,15 @@
 ---
 number:          2
-title:           "CI Infrastructure Fix: Enable Development Workflow"
-goal:            "Resolve submodule blocker and establish working CI pipeline with basic test validation"
-timebox_minutes: 90
-coverage_min:    80
+title:           "Async Architecture Foundation: CI Fix + Workflow Skeleton"
+goal:            "Fix CI blocker and establish async workflow foundation with queue architecture for full ingestion pipeline"
+timebox_minutes: 180
+coverage_min:    85
 test_pattern:    "test_.*"
 template_version: 2.0 (2025-06-08)
 require_golden_path: false
 ---
 
-# Sprint 2 · CI Infrastructure Fix: Enable Development Workflow
+# Sprint 2 · Async Architecture Foundation: CI Fix + Workflow Skeleton
 
 ## 0 · Roles & Prime Rules
 
@@ -32,17 +32,17 @@ Max 3 tasks; anything larger ⇒ refuse & ask to split next sprint.
 
 ## 1 · Sprint Goal & Why It Matters (≤ 40 words)
 
-**Goal**: Resolve submodule blocker and establish working CI pipeline with basic test validation
+**Goal**: Fix CI blocker and establish async workflow foundation with queue architecture for full ingestion pipeline
 
-**Why now**: Critical CI blocker prevents all code validation, testing, and development workflow - must fix before any feature development can proceed.
+**Why now**: "Godly Advice 1.0" reveals 10-sprint implementation path requiring async architecture foundation - must establish core workflow skeleton before RSS/RunPod integration.
 
 ## 2 · Tasks ("Rule of Three")
 
 | # | Task Name (imperative) | Acceptance Criteria (autotested) |
 |---|------------------------|-----------------------------------|
-| 1 | Remove broken common-utils submodule dependency | pytest -k test_.* green; .gitmodules cleaned, no 404 errors in CI checkout |
-| 2 | Create basic test structure with smoke tests | CI runs test discovery successfully; tests/ directory with working import validation |
-| 3 | Verify end-to-end CI pipeline functionality | CI badge shows green; all workflow steps complete without infrastructure failures |
+| 1 | Fix CI blocker and establish working pipeline | pytest -k test_.* green; .gitmodules fixed, CI badge green, basic test structure working |
+| 2 | Implement async workflow foundation with queue architecture | Core async queues created (discovery, processing, assembly, delivery); pytest validates queue operations |
+| 3 | Create RunPod authentication framework and workflow skeleton | Environment config structure, auth framework, workflow orchestrator class with queue management |
 
 ## 3 · Interfaces Changed / Added
 *(append only; one row per file or endpoint)*
@@ -50,8 +50,11 @@ Max 3 tasks; anything larger ⇒ refuse & ask to split next sprint.
 | File / API | Brief Change | Inputs → Outputs |
 |------------|--------------|------------------|
 | `.gitmodules` | Remove broken submodule reference | Git submodule commands → No 404 errors |
-| `tests/__init__.py` | New test package structure | Test discovery → Basic test suite found |
-| `tests/test_smoke.py` | Basic import validation tests | pytest → Core modules importable |
+| `core/workflow_orchestrator.py` | New async workflow orchestrator | Queue management → Coordinated pipeline execution |
+| `core/queue_manager.py` | Async queue architecture foundation | Event routing → Multi-stage processing pipeline |
+| `auth/runpod_client.py` | RunPod authentication framework | API credentials → Authenticated RunPod integration |
+| `config/environment.py` | Environment configuration system | Env vars → Structured config for all components |
+| `tests/test_async_workflow.py` | Async workflow and queue tests | pytest → Queue operations and workflow validated |
 
 ## 4 · Success Metrics (CI-Enforced)
 
@@ -100,11 +103,13 @@ Any scope creep or guard-rail breach triggers automatic sprint rollback.
 
 **Success** = 
 - ✅ CI green 
-- ✅ Coverage ↑ 
+- ✅ Coverage ≥ 85% 
 - ✅ No guard-rail hits 
 - ✅ Submodule blocker resolved
-- ✅ Basic test structure working
-- ✅ Development workflow unblocked
+- ✅ Async workflow foundation established
+- ✅ Queue architecture operational
+- ✅ RunPod auth framework ready
+- ✅ Ready for Sprint 3 RSS implementation
 - ✅ Honest docs
 
 **Anything else** = re-scope next sprint. 
