@@ -3,7 +3,6 @@ number:          2
 title:           "CI Infrastructure Fix: Enable Development Workflow"
 goal:            "Resolve submodule blocker and establish working CI pipeline with basic test validation"
 timebox_minutes: 90
-loc_budget:      50
 coverage_min:    80
 test_pattern:    "test_.*"
 template_version: 2.0 (2025-06-08)
@@ -57,7 +56,6 @@ Max 3 tasks; anything larger ⇒ refuse & ask to split next sprint.
 ## 4 · Success Metrics (CI-Enforced)
 
 - ✅ Green CI badge for branch `sprint-2`
-- ✅ `scripts/ci/check_loc_budget.sh 50`
 - ✅ Coverage ≥ 80% on changed files
 - ✅ `ruff format --check` & `ruff --fail-level error`
 - ✅ No new deps (`scripts/ci/check_new_deps.sh`)
@@ -66,7 +64,7 @@ Max 3 tasks; anything larger ⇒ refuse & ask to split next sprint.
 
 1. **Think privately** (outline in comments)
 2. **Add failing test** matching `test_.*`
-3. **Implement code** to pass test within 50 LOC budget
+3. **Implement code** to pass test
 4. **Run all CI checks** locally
 5. **Self-Review Checklist** (below)
 6. **Open PR** to `sprint-2` branch
@@ -75,7 +73,6 @@ Max 3 tasks; anything larger ⇒ refuse & ask to split next sprint.
 
 - [ ] All tests green locally
 - [ ] No binary files, no new deps
-- [ ] LOC delta ≤ 50
 - [ ] Docs updated only for shipped features
 - [ ] Commit message begins `feat(s2):` or `fix(s2):`
 
