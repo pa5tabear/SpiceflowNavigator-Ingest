@@ -1,0 +1,1138 @@
+# 🔄 Navigator-Ingest: Complete Asynchronous Workflow Guide
+
+## 🎯 Overview
+
+This guide details the **complete asynchronous workflow** that Navigator-Ingest should implement for processing strategic content from RSS feeds through RunPod transcription and delivery to downstream agents.
+
+## 🔐 Authentication & Configuration
+
+### Required Environment Variables
+
+```bash
+# Primary RunPod endpoint (your server)
+export RUNPOD_ENDPOINT="https://your-runpod-server.com"
+
+# API authentication key for RunPod access
+export RUNPOD_API_KEY="your-api-key-here"
+
+# Optional: Timeout and performance configurations
+export RUNPOD_TIMEOUT=300          # 5 minutes default
+export RUNPOD_MAX_RETRIES=3        # Max retry attempts
+export MAX_CONCURRENT_JOBS=5       # Concurrent transcription jobs
+export CHUNK_SIZE_SECONDS=300      # 5 minute audio chunks
+export MAX_CONCURRENT_DOWNLOADS=3  # Concurrent audio downloads
+```
+
+### Authentication Pattern
+
+```python
+import os
+import aiohttp
+import asyncio
+from datetime import datetime
+from pathlib import Path
+
+# All RunPod API calls include authentication
+headers = {
+    "Authorization": f"Bearer {os.getenv('RUNPOD_API_KEY')}",
+    "Content-Type": "application/json"
+}
+
+async def call_runpod_api(endpoint: str, data: dict) -> dict:
+    """Authenticated API call to RunPod endpoint."""
+    url = f"{os.getenv('RUNPOD_ENDPOINT')}/{endpoint}"
+    timeout = int(os.getenv('RUNPOD_TIMEOUT', 300))
+    
+    async with aiohttp.ClientSession() as session:
+        async with session.post(
+            url,
+            headers=headers,
+            json=data,
+            timeout=aiohttp.ClientTimeout(total=timeout)
+        ) as response:
+            response.raise_for_status()
+            return await response.json()
+```
+
+## 📊 Complete End-to-End Workflow Architecture
+
+```
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│   RSS Sources   │───▶│   RSS Monitor    │───▶│ Content Filter  │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+                                                         │
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│ Output Delivery │◀───│ Content Enricher │◀───│ Audio Detector  │
+└─────────────────┘    └──────────────────┘    └─────────────────┘
+         │                        ▲                       │
+         ▼                        │                       ▼
+┌─────────────────┐    ┌──────────────────┐    ┌─────────────────┐
+│Navigator-Strategy│    │Transcript Assembly│    │ Download Queue  │
+│Navigator-UI     │    └──────────────────┘    └─────────────────┘
+│Navigator-Pipeline│               ▲                       │
+└─────────────────┘               │                       ▼
+                        ┌──────────────────┐    ┌─────────────────┐
+                        │RunPod Async API │◀───│ Audio Chunker   │
+                        └──────────────────┘    └─────────────────┘
+```
+
+## 🔄 Phase-by-Phase Implementation
+
+### Phase 1: Content Discovery & Monitoring
+
+**1.1 Continuous RSS Feed Monitoring**
+```python
+import asyncio
+import feedparser
+from datetime import datetime, timedelta
+from config import load_feeds, RSSFeed  # From CommonUtils
+
+class RSSMonitor:
+    def __init__(self):
+        self.feeds = load_feeds()
+        self.content_discovery_queue = asyncio.Queue()
+        self.seen_content_hashes = set()
+    
+    async def start_monitoring(self):
+        """Start continuous monitoring of all RSS feeds."""
+        tasks = []
+        for feed in self.feeds:
+            # Calculate polling interval based on strategic importance
+            # Higher importance = more frequent polling (1-10 scale)
+            base_interval = 600  # 10 minutes
+            poll_interval = max(60, base_interval // feed.strategic_importance)
+            
+            task = asyncio.create_task(
+                self.monitor_single_feed(feed, poll_interval)
+            )
+            tasks.append(task)
+        
+        # Run all feed monitoring concurrently
+        await asyncio.gather(*tasks)
+    
+    async def monitor_single_feed(self, feed: RSSFeed, interval: int):
+        """Monitor a single RSS feed with exponential backoff on failures."""
+        consecutive_failures = 0
+        
+        while True:
+            try:
+                # Parse feed asynchronously
+                entries = await self.parse_feed_async(feed.url)
+                
+                for entry in entries:
+                    if await self.is_new_content(entry):
+                        await self.content_discovery_queue.put({
+                            'entry': entry,
+                            'feed': feed,
+                            'discovered_at': datetime.now(),
+                            'priority': feed.strategic_importance,
+                            'content_hash': self.generate_content_hash(entry)
+                        })
+                
+                # Reset failure count on success
+                consecutive_failures = 0
+                
+            except Exception as e:
+                consecutive_failures += 1
+                logger.error(f"Failed to monitor {feed.name}: {e}")
+                
+                # Exponential backoff on failures (max 1 hour)
+                if consecutive_failures <= 3:
+                    backoff_delay = min(interval * (2 ** consecutive_failures), 3600)
+                    await asyncio.sleep(backoff_delay)
+                    continue
+            
+            # Normal polling interval
+            await asyncio.sleep(interval)
+    
+    async def parse_feed_async(self, feed_url: str) -> list:
+        """Parse RSS feed asynchronously."""
+        # Use asyncio.to_thread for CPU-bound feedparser work
+        feed = await asyncio.to_thread(feedparser.parse, feed_url)
+        
+        if feed.bozo:
+            raise Exception(f"Malformed RSS feed: {feed_url}")
+        
+        return feed.entries
+    
+    async def is_new_content(self, entry: dict) -> bool:
+        """Check if content is new using content hashing."""
+        content_hash = self.generate_content_hash(entry)
+        
+        if content_hash in self.seen_content_hashes:
+            return False
+        
+        self.seen_content_hashes.add(content_hash)
+        return True
+    
+    def generate_content_hash(self, entry: dict) -> str:
+        """Generate unique hash for content deduplication."""
+        import hashlib
+        
+        # Use URL + title + description for hash
+        content_string = f"{entry.get('link', '')}{entry.get('title', '')}{entry.get('description', '')}"
+        return hashlib.sha256(content_string.encode()).hexdigest()[:16]
+```
+
+**1.2 Content Filtering & Prioritization**
+```python
+class ContentFilter:
+    def __init__(self):
+        self.audio_processing_queue = asyncio.Queue()
+        self.text_processing_queue = asyncio.Queue()
+    
+    async def start_filtering(self, content_discovery_queue: asyncio.Queue):
+        """Filter and route discovered content."""
+        while True:
+            content_item = await content_discovery_queue.get()
+            
+            try:
+                # Apply content filters
+                if await self.passes_content_filters(content_item):
+                    # Detect content type
+                    content_type = await self.detect_content_type(content_item['entry'])
+                    
+                    if content_type == 'audio':
+                        # Add to audio processing pipeline
+                        await self.audio_processing_queue.put({
+                            **content_item,
+                            'content_type': 'audio',
+                            'processing_priority': self.calculate_priority(content_item)
+                        })
+                    elif content_type == 'text':
+                        # Add to text processing pipeline
+                        await self.text_processing_queue.put({
+                            **content_item,
+                            'content_type': 'text'
+                        })
+                
+            except Exception as e:
+                logger.error(f"Content filtering error: {e}")
+                # Continue processing other items
+            
+            content_discovery_queue.task_done()
+    
+    async def detect_content_type(self, entry: dict) -> str:
+        """Detect if RSS entry contains audio content."""
+        # Check for audio file extensions in links
+        audio_extensions = ['.mp3', '.wav', '.m4a', '.ogg', '.flac']
+        
+        link = entry.get('link', '').lower()
+        for ext in audio_extensions:
+            if ext in link:
+                return 'audio'
+        
+        # Check enclosures for audio content
+        if hasattr(entry, 'enclosures'):
+            for enclosure in entry.enclosures:
+                if enclosure.type.startswith('audio/'):
+                    return 'audio'
+        
+        return 'text'
+    
+    async def passes_content_filters(self, content_item: dict) -> bool:
+        """Apply content relevance filters."""
+        entry = content_item['entry']
+        feed = content_item['feed']
+        
+        # Basic filters
+        if not entry.get('title') or not entry.get('link'):
+            return False
+        
+        # Length filters for audio content
+        title = entry.get('title', '')
+        if len(title) < 10 or len(title) > 200:
+            return False
+        
+        # Feed-specific filters based on strategic importance
+        if feed.strategic_importance < 5:
+            # Apply stricter filters for lower importance feeds
+            keywords = ['podcast', 'episode', 'interview', 'discussion']
+            if not any(keyword in title.lower() for keyword in keywords):
+                return False
+        
+        return True
+```
+
+### Phase 2: Audio Processing Pipeline
+
+**2.1 Audio Download & Validation**
+```python
+import aiofiles
+from pathlib import Path
+import uuid
+
+class AudioProcessor:
+    def __init__(self):
+        self.chunking_queue = asyncio.Queue()
+        self.download_semaphore = asyncio.Semaphore(
+            int(os.getenv('MAX_CONCURRENT_DOWNLOADS', 3))
+        )
+        self.temp_dir = Path('temp/audio')
+        self.temp_dir.mkdir(parents=True, exist_ok=True)
+    
+    async def start_audio_processing(self, audio_processing_queue: asyncio.Queue):
+        """Start audio download and processing workers."""
+        # Start multiple download workers
+        workers = []
+        for i in range(3):
+            worker = asyncio.create_task(
+                self.audio_download_worker(audio_processing_queue)
+            )
+            workers.append(worker)
+        
+        await asyncio.gather(*workers)
+    
+    async def audio_download_worker(self, audio_queue: asyncio.Queue):
+        """Download and validate audio files."""
+        while True:
+            job = await audio_queue.get()
+            
+            async with self.download_semaphore:
+                try:
+                    # Download audio file
+                    audio_path = await self.download_audio_async(job['entry']['link'])
+                    
+                    # Validate audio file
+                    audio_info = await self.validate_audio_file(audio_path)
+                    
+                    # Add to chunking queue
+                    await self.chunking_queue.put({
+                        **job,
+                        'audio_path': audio_path,
+                        'audio_info': audio_info,
+                        'downloaded_at': datetime.now()
+                    })
+                    
+                except Exception as e:
+                    await self.handle_download_failure(job, e)
+            
+            audio_queue.task_done()
+    
+    async def download_audio_async(self, url: str) -> Path:
+        """Download audio file asynchronously."""
+        filename = f"audio_{uuid.uuid4().hex}.mp3"
+        file_path = self.temp_dir / filename
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                response.raise_for_status()
+                
+                # Stream download to handle large files
+                async with aiofiles.open(file_path, 'wb') as f:
+                    async for chunk in response.content.iter_chunked(8192):
+                        await f.write(chunk)
+        
+        return file_path
+    
+    async def validate_audio_file(self, audio_path: Path) -> dict:
+        """Validate audio file and extract metadata."""
+        try:
+            # Use ffprobe to get audio information
+            import subprocess
+            import json
+            
+            cmd = [
+                'ffprobe', 
+                '-v', 'quiet',
+                '-print_format', 'json',
+                '-show_format',
+                '-show_streams',
+                str(audio_path)
+            ]
+            
+            result = await asyncio.to_thread(
+                subprocess.run, cmd, capture_output=True, text=True
+            )
+            
+            if result.returncode != 0:
+                raise Exception(f"Invalid audio file: {audio_path}")
+            
+            metadata = json.loads(result.stdout)
+            format_info = metadata['format']
+            
+            return {
+                'duration': float(format_info['duration']),
+                'size': int(format_info['size']),
+                'format': format_info['format_name'],
+                'bitrate': int(format_info.get('bit_rate', 0))
+            }
+            
+        except Exception as e:
+            # Clean up invalid file
+            audio_path.unlink(missing_ok=True)
+            raise Exception(f"Audio validation failed: {e}")
+```
+
+**2.2 Intelligent Audio Chunking**
+```python
+class AudioChunker:
+    def __init__(self):
+        self.transcription_queue = asyncio.Queue()
+        self.chunk_size = int(os.getenv('CHUNK_SIZE_SECONDS', 300))
+    
+    async def start_chunking(self, chunking_queue: asyncio.Queue):
+        """Start audio chunking workers."""
+        while True:
+            job = await chunking_queue.get()
+            
+            try:
+                # Intelligent chunking based on audio duration
+                chunks = await self.intelligent_chunk_audio(
+                    job['audio_path'], 
+                    job['audio_info']
+                )
+                
+                # Create transcription jobs for each chunk
+                for i, chunk in enumerate(chunks):
+                    await self.transcription_queue.put({
+                        **job,
+                        'chunk_id': i,
+                        'total_chunks': len(chunks),
+                        'chunk_path': chunk['path'],
+                        'chunk_start': chunk['start_time'],
+                        'chunk_end': chunk['end_time'],
+                        'chunk_overlap': chunk.get('overlap', 0)
+                    })
+                    
+            except Exception as e:
+                await self.handle_chunking_failure(job, e)
+            
+            chunking_queue.task_done()
+    
+    async def intelligent_chunk_audio(self, audio_path: Path, audio_info: dict) -> list:
+        """Intelligently chunk audio based on content and silence detection."""
+        duration = audio_info['duration']
+        
+        if duration <= self.chunk_size:
+            # Short audio, no chunking needed
+            return [{
+                'path': audio_path, 
+                'start_time': 0, 
+                'end_time': duration
+            }]
+        
+        # For longer audio, create overlapping chunks
+        chunks = []
+        overlap_seconds = 5  # 5 second overlap for continuity
+        
+        current_start = 0
+        chunk_number = 0
+        
+        while current_start < duration:
+            chunk_end = min(current_start + self.chunk_size, duration)
+            
+            # Extract audio segment
+            chunk_path = await self.extract_audio_segment(
+                audio_path, current_start, chunk_end, chunk_number
+            )
+            
+            chunks.append({
+                'path': chunk_path,
+                'start_time': current_start,
+                'end_time': chunk_end,
+                'overlap': overlap_seconds if chunk_number > 0 else 0
+            })
+            
+            # Move to next chunk with overlap
+            current_start = chunk_end - overlap_seconds
+            chunk_number += 1
+        
+        return chunks
+    
+    async def extract_audio_segment(
+        self, 
+        audio_path: Path, 
+        start: float, 
+        end: float, 
+        chunk_num: int
+    ) -> Path:
+        """Extract audio segment using ffmpeg."""
+        chunk_filename = f"chunk_{chunk_num}_{audio_path.stem}.mp3"
+        chunk_path = audio_path.parent / chunk_filename
+        
+        cmd = [
+            'ffmpeg',
+            '-y',  # Overwrite output files
+            '-i', str(audio_path),
+            '-ss', str(start),
+            '-t', str(end - start),
+            '-c:a', 'mp3',
+            '-b:a', '128k',
+            str(chunk_path)
+        ]
+        
+        result = await asyncio.to_thread(
+            subprocess.run, cmd, capture_output=True
+        )
+        
+        if result.returncode != 0:
+            raise Exception(f"Audio segment extraction failed: {result.stderr}")
+        
+        return chunk_path
+```
+
+### Phase 3: Asynchronous RunPod Transcription
+
+**3.1 RunPod Job Submission & Management**
+```python
+class RunPodTranscriber:
+    def __init__(self):
+        self.runpod_tracking_queue = asyncio.Queue()
+        self.transcript_assembly_queue = asyncio.Queue()
+        self.job_semaphore = asyncio.Semaphore(
+            int(os.getenv('MAX_CONCURRENT_JOBS', 5))
+        )
+        self.active_jobs = {}  # Track submitted jobs
+    
+    async def start_transcription(self, transcription_queue: asyncio.Queue):
+        """Start transcription workers."""
+        # Start job submission workers
+        submission_workers = [
+            asyncio.create_task(self.transcription_worker(transcription_queue))
+            for _ in range(3)
+        ]
+        
+        # Start job tracking worker (for polling-based completion)
+        tracking_worker = asyncio.create_task(self.job_tracking_worker())
+        
+        await asyncio.gather(*submission_workers, tracking_worker)
+    
+    async def transcription_worker(self, transcription_queue: asyncio.Queue):
+        """Submit transcription jobs to RunPod asynchronously."""
+        while True:
+            job = await transcription_queue.get()
+            
+            async with self.job_semaphore:
+                try:
+                    # Submit to RunPod async API
+                    runpod_job = await self.submit_transcription_job(job)
+                    
+                    # Track job for completion
+                    self.active_jobs[runpod_job['id']] = job
+                    
+                    await self.runpod_tracking_queue.put({
+                        **job,
+                        'runpod_job_id': runpod_job['id'],
+                        'submitted_at': datetime.now(),
+                        'estimated_completion': self.calculate_eta(job)
+                    })
+                    
+                except Exception as e:
+                    await self.handle_transcription_submission_failure(job, e)
+            
+            transcription_queue.task_done()
+    
+    async def submit_transcription_job(self, job: dict) -> dict:
+        """Submit transcription job to RunPod API."""
+        
+        # Upload audio chunk to accessible storage
+        audio_url = await self.upload_to_temporary_storage(job['chunk_path'])
+        
+        # Prepare job payload
+        payload = {
+            'input': {
+                'audio_url': audio_url,
+                'language': 'auto',  # Auto-detect language
+                'output_format': 'json',
+                'timestamps': True,
+                'word_timestamps': True,
+                'context': {
+                    'source_feed': job['feed'].name,
+                    'strategic_importance': job['feed'].strategic_importance,
+                    'chunk_info': {
+                        'chunk_id': job['chunk_id'],
+                        'total_chunks': job['total_chunks'],
+                        'start_time': job['chunk_start'],
+                        'end_time': job['chunk_end']
+                    }
+                }
+            },
+            # Webhook for completion notification (preferred over polling)
+            'webhook': f"{os.getenv('RUNPOD_ENDPOINT')}/webhook/transcription_complete"
+        }
+        
+        # Submit to RunPod
+        response = await call_runpod_api('submit_job', payload)
+        
+        if response.get('status') != 'success':
+            raise Exception(f"RunPod submission failed: {response}")
+        
+        logger.info(f"Submitted transcription job {response['job']['id']}")
+        return response['job']
+    
+    async def upload_to_temporary_storage(self, file_path: Path) -> str:
+        """Upload audio chunk to temporary storage accessible by RunPod."""
+        # This implementation depends on your RunPod setup
+        # Options: S3, temporary HTTP server, direct file upload
+        
+        # Example: Upload to temporary HTTP endpoint
+        upload_url = f"{os.getenv('RUNPOD_ENDPOINT')}/upload/audio"
+        
+        async with aiohttp.ClientSession() as session:
+            with open(file_path, 'rb') as f:
+                data = aiohttp.FormData()
+                data.add_field('audio', f, filename=file_path.name)
+                
+                async with session.post(
+                    upload_url, 
+                    data=data, 
+                    headers={"Authorization": f"Bearer {os.getenv('RUNPOD_API_KEY')}"}
+                ) as response:
+                    response.raise_for_status()
+                    result = await response.json()
+                    return result['file_url']
+```
+
+**3.2 Webhook-based Completion (Preferred Method)**
+```python
+from aiohttp import web
+import hmac
+import hashlib
+
+class WebhookHandler:
+    def __init__(self, transcriber: RunPodTranscriber):
+        self.transcriber = transcriber
+        self.webhook_secret = os.getenv('WEBHOOK_SECRET', '')
+    
+    def setup_webhook_server(self):
+        """Setup webhook server for RunPod completion notifications."""
+        app = web.Application()
+        app.router.add_post('/webhook/transcription_complete', self.handle_transcription_webhook)
+        return app
+    
+    async def handle_transcription_webhook(self, request):
+        """Handle webhook from RunPod when transcription completes."""
+        try:
+            # Verify webhook authenticity
+            if not await self.verify_webhook_signature(request):
+                raise web.HTTPUnauthorized(text="Invalid webhook signature")
+            
+            data = await request.json()
+            job_id = data['job_id']
+            
+            # Get original job info
+            if job_id not in self.transcriber.active_jobs:
+                logger.warning(f"Received webhook for unknown job: {job_id}")
+                return web.json_response({'status': 'unknown_job'})
+            
+            original_job = self.transcriber.active_jobs[job_id]
+            
+            # Process completion
+            await self.transcriber.transcript_assembly_queue.put({
+                **original_job,
+                'runpod_job_id': job_id,
+                'transcript_result': data['output'],
+                'completed_at': datetime.now(),
+                'webhook_received': True,
+                'processing_time': data.get('processing_time', 0)
+            })
+            
+            # Clean up tracking
+            del self.transcriber.active_jobs[job_id]
+            
+            logger.info(f"Transcription completed via webhook: {job_id}")
+            return web.json_response({'status': 'received'})
+            
+        except Exception as e:
+            logger.error(f"Webhook handling error: {e}")
+            return web.HTTPInternalServerError(text=str(e))
+    
+    async def verify_webhook_signature(self, request) -> bool:
+        """Verify webhook signature for security."""
+        if not self.webhook_secret:
+            return True  # Skip verification if no secret configured
+        
+        signature = request.headers.get('X-Webhook-Signature')
+        if not signature:
+            return False
+        
+        body = await request.read()
+        expected_signature = hmac.new(
+            self.webhook_secret.encode(),
+            body,
+            hashlib.sha256
+        ).hexdigest()
+        
+        return hmac.compare_digest(signature, expected_signature)
+```
+
+### Phase 4: Transcript Assembly & Content Enrichment
+
+**4.1 Multi-Chunk Transcript Assembly**
+```python
+class TranscriptAssembler:
+    def __init__(self):
+        self.content_enrichment_queue = asyncio.Queue()
+        self.chunk_storage = {}  # Store chunks by content ID
+    
+    async def start_assembly(self, assembly_queue: asyncio.Queue):
+        """Start transcript assembly worker."""
+        while True:
+            completed_chunk = await assembly_queue.get()
+            
+            try:
+                content_id = self.get_content_id(completed_chunk)
+                
+                # Store chunk result
+                if content_id not in self.chunk_storage:
+                    self.chunk_storage[content_id] = {}
+                
+                self.chunk_storage[content_id][completed_chunk['chunk_id']] = completed_chunk
+                
+                # Check if all chunks are complete
+                expected_chunks = completed_chunk['total_chunks']
+                received_chunks = len(self.chunk_storage[content_id])
+                
+                if received_chunks == expected_chunks:
+                    # All chunks received, assemble transcript
+                    full_transcript = await self.assemble_full_transcript(
+                        self.chunk_storage[content_id]
+                    )
+                    
+                    await self.content_enrichment_queue.put({
+                        'content_id': content_id,
+                        'full_transcript': full_transcript,
+                        'metadata': self.extract_metadata(completed_chunk),
+                        'assembled_at': datetime.now()
+                    })
+                    
+                    # Clean up chunk storage
+                    del self.chunk_storage[content_id]
+                    
+                    # Clean up temporary files
+                    await self.cleanup_chunks(self.chunk_storage.get(content_id, {}))
+                    
+            except Exception as e:
+                await self.handle_assembly_error(completed_chunk, e)
+            
+            assembly_queue.task_done()
+    
+    async def assemble_full_transcript(self, chunks: dict) -> dict:
+        """Assemble full transcript from chunks with overlap handling."""
+        sorted_chunks = sorted(chunks.values(), key=lambda x: x['chunk_id'])
+        
+        full_text = ""
+        word_timestamps = []
+        confidence_scores = []
+        
+        for i, chunk in enumerate(sorted_chunks):
+            transcript_data = chunk['transcript_result']
+            chunk_text = transcript_data['text']
+            
+            if i > 0:
+                # Remove overlap from previous chunk
+                overlap_duration = chunk['chunk_overlap']
+                chunk_text = self.remove_overlap_text(
+                    chunk_text, 
+                    transcript_data.get('word_timestamps', []),
+                    overlap_duration
+                )
+            
+            full_text += " " + chunk_text
+            
+            # Adjust timestamps for chunk position
+            adjusted_timestamps = self.adjust_timestamps(
+                transcript_data.get('word_timestamps', []), 
+                chunk['chunk_start']
+            )
+            word_timestamps.extend(adjusted_timestamps)
+            
+            confidence_scores.extend(
+                transcript_data.get('confidence_scores', [])
+            )
+        
+        return {
+            'text': full_text.strip(),
+            'word_timestamps': word_timestamps,
+            'confidence_scores': confidence_scores,
+            'total_duration': sorted_chunks[-1]['chunk_end'],
+            'assembly_quality': self.calculate_assembly_quality(confidence_scores),
+            'language': sorted_chunks[0]['transcript_result'].get('language', 'unknown')
+        }
+    
+    def remove_overlap_text(self, text: str, word_timestamps: list, overlap_duration: float) -> str:
+        """Remove overlap text from chunk based on timestamps."""
+        if not word_timestamps or overlap_duration <= 0:
+            return text
+        
+        # Find words that fall within overlap period
+        overlap_word_count = 0
+        for word_data in word_timestamps:
+            if word_data['start'] < overlap_duration:
+                overlap_word_count += 1
+            else:
+                break
+        
+        # Remove overlap words
+        words = text.split()
+        return ' '.join(words[overlap_word_count:])
+    
+    def adjust_timestamps(self, word_timestamps: list, chunk_start: float) -> list:
+        """Adjust word timestamps for chunk position in full audio."""
+        adjusted = []
+        for word_data in word_timestamps:
+            adjusted.append({
+                **word_data,
+                'start': word_data['start'] + chunk_start,
+                'end': word_data['end'] + chunk_start
+            })
+        return adjusted
+    
+    def calculate_assembly_quality(self, confidence_scores: list) -> float:
+        """Calculate overall transcript quality score."""
+        if not confidence_scores:
+            return 0.0
+        
+        return sum(confidence_scores) / len(confidence_scores)
+```
+
+### Phase 5: Content Enrichment & Downstream Delivery
+
+**5.1 Content Enrichment Pipeline**
+```python
+class ContentEnricher:
+    def __init__(self):
+        self.output_delivery_queue = asyncio.Queue()
+    
+    async def start_enrichment(self, enrichment_queue: asyncio.Queue):
+        """Start content enrichment worker."""
+        while True:
+            content = await enrichment_queue.get()
+            
+            try:
+                # Apply enrichment pipeline
+                enriched_content = await self.enrich_content(content)
+                
+                # Format for downstream agents
+                output_data = await self.format_for_output(enriched_content)
+                
+                # Queue for delivery
+                await self.output_delivery_queue.put(output_data)
+                
+            except Exception as e:
+                await self.handle_enrichment_error(content, e)
+            
+            enrichment_queue.task_done()
+    
+    async def enrich_content(self, content: dict) -> dict:
+        """Apply content enrichment pipeline."""
+        transcript = content['full_transcript']
+        text = transcript['text']
+        
+        # Run enrichment tasks concurrently
+        enrichment_tasks = [
+            self.extract_named_entities(text),
+            self.classify_topics(text),
+            self.analyze_sentiment(text),
+            self.generate_summary(text),
+            self.extract_key_phrases(text)
+        ]
+        
+        (entities, topics, sentiment, summary, key_phrases) = await asyncio.gather(
+            *enrichment_tasks, return_exceptions=True
+        )
+        
+        return {
+            **content,
+            'enrichment': {
+                'entities': entities if not isinstance(entities, Exception) else [],
+                'topics': topics if not isinstance(topics, Exception) else [],
+                'sentiment': sentiment if not isinstance(sentiment, Exception) else None,
+                'summary': summary if not isinstance(summary, Exception) else "",
+                'key_phrases': key_phrases if not isinstance(key_phrases, Exception) else [],
+                'enriched_at': datetime.now()
+            }
+        }
+    
+    async def extract_named_entities(self, text: str) -> list:
+        """Extract named entities (people, organizations, locations)."""
+        # Placeholder - implement with spaCy or similar NLP library
+        import re
+        
+        # Simple regex-based entity extraction as placeholder
+        entities = []
+        
+        # Extract potential person names (Title Case)
+        person_pattern = r'\b[A-Z][a-z]+ [A-Z][a-z]+\b'
+        persons = re.findall(person_pattern, text)
+        for person in persons:
+            entities.append({'text': person, 'type': 'PERSON'})
+        
+        # Extract potential organizations (with common suffixes)
+        org_pattern = r'\b[A-Z][a-zA-Z\s]+(Inc|Corp|LLC|Company|Foundation)\b'
+        orgs = re.findall(org_pattern, text)
+        for org in orgs:
+            entities.append({'text': org, 'type': 'ORGANIZATION'})
+        
+        return entities[:10]  # Limit to top 10
+    
+    async def classify_topics(self, text: str) -> list:
+        """Classify content topics."""
+        # Placeholder - implement with ML model or keyword matching
+        topic_keywords = {
+            'technology': ['AI', 'artificial intelligence', 'machine learning', 'software', 'tech'],
+            'business': ['revenue', 'profit', 'market', 'company', 'investment'],
+            'politics': ['government', 'election', 'policy', 'congress', 'political'],
+            'health': ['medical', 'health', 'disease', 'treatment', 'doctor'],
+            'science': ['research', 'study', 'experiment', 'discovery', 'scientific']
+        }
+        
+        text_lower = text.lower()
+        topics = []
+        
+        for topic, keywords in topic_keywords.items():
+            score = sum(1 for keyword in keywords if keyword in text_lower)
+            if score > 0:
+                topics.append({'topic': topic, 'confidence': min(score / len(keywords), 1.0)})
+        
+        return sorted(topics, key=lambda x: x['confidence'], reverse=True)[:3]
+    
+    async def analyze_sentiment(self, text: str) -> dict:
+        """Analyze content sentiment."""
+        # Placeholder - implement with sentiment analysis model
+        positive_words = ['good', 'great', 'excellent', 'positive', 'success', 'win']
+        negative_words = ['bad', 'terrible', 'negative', 'fail', 'loss', 'problem']
+        
+        text_lower = text.lower()
+        positive_count = sum(1 for word in positive_words if word in text_lower)
+        negative_count = sum(1 for word in negative_words if word in text_lower)
+        
+        if positive_count > negative_count:
+            return {'sentiment': 'positive', 'confidence': 0.7}
+        elif negative_count > positive_count:
+            return {'sentiment': 'negative', 'confidence': 0.7}
+        else:
+            return {'sentiment': 'neutral', 'confidence': 0.5}
+    
+    async def generate_summary(self, text: str) -> str:
+        """Generate content summary."""
+        # Placeholder - implement with summarization model
+        sentences = text.split('. ')
+        if len(sentences) <= 3:
+            return text
+        
+        # Simple extractive summary - take first and last sentences
+        return f"{sentences[0]}. {sentences[-1]}"
+    
+    async def extract_key_phrases(self, text: str) -> list:
+        """Extract key phrases from content."""
+        # Placeholder - implement with keyphrase extraction
+        import re
+        
+        # Extract phrases between 2-4 words that appear multiple times
+        phrases = re.findall(r'\b\w+\s+\w+(?:\s+\w+)?(?:\s+\w+)?\b', text.lower())
+        phrase_counts = {}
+        
+        for phrase in phrases:
+            phrase_counts[phrase] = phrase_counts.get(phrase, 0) + 1
+        
+        # Return phrases that appear more than once
+        key_phrases = [phrase for phrase, count in phrase_counts.items() if count > 1]
+        return key_phrases[:5]  # Top 5
+    
+    async def format_for_output(self, content: dict) -> dict:
+        """Format content for downstream agent consumption."""
+        return {
+            'content_id': content['content_id'],
+            'source_feed': content['metadata']['feed_name'],
+            'title': content['metadata']['title'],
+            'transcript': content['full_transcript']['text'],
+            'metadata': {
+                'publish_date': content['metadata']['publish_date'],
+                'duration': content['full_transcript']['total_duration'],
+                'source_url': content['metadata']['source_url'],
+                'strategic_importance': content['metadata']['strategic_importance'],
+                'processing_time': self.calculate_processing_time(content),
+                'quality_score': content['full_transcript']['assembly_quality'],
+                'language': content['full_transcript']['language']
+            },
+            'enrichment': content['enrichment'],
+            'word_timestamps': content['full_transcript']['word_timestamps'],
+            'confidence_scores': content['full_transcript']['confidence_scores'],
+            'processing_status': 'completed',
+            'processed_at': datetime.now().isoformat()
+        }
+```
+
+**5.2 Downstream Agent Delivery**
+```python
+class DeliveryManager:
+    def __init__(self):
+        self.strategy_queue = asyncio.Queue()
+        self.ui_queue = asyncio.Queue()
+        self.pipeline_queue = asyncio.Queue()
+    
+    async def start_delivery(self, delivery_queue: asyncio.Queue):
+        """Start delivery to downstream agents."""
+        while True:
+            content = await delivery_queue.get()
+            
+            try:
+                await self.deliver_to_downstream_agents(content)
+            except Exception as e:
+                logger.error(f"Delivery error: {e}")
+            
+            delivery_queue.task_done()
+    
+    async def deliver_to_downstream_agents(self, content: dict):
+        """Deliver processed content to downstream agents."""
+        
+        # Deliver to Navigator-Strategy for analysis
+        strategy_payload = {
+            'agent': 'navigator-strategy',
+            'content': content,
+            'delivery_priority': content['metadata']['strategic_importance'],
+            'delivery_timestamp': datetime.now().isoformat()
+        }
+        await self.strategy_queue.put(strategy_payload)
+        
+        # Deliver summary to Navigator-UI for display
+        ui_payload = {
+            'agent': 'navigator-ui',
+            'content': {
+                'content_id': content['content_id'],
+                'title': content['title'],
+                'source_feed': content['source_feed'],
+                'processing_status': content['processing_status'],
+                'processed_at': content['processed_at'],
+                'summary': content['enrichment']['summary'],
+                'duration': content['metadata']['duration'],
+                'quality_score': content['metadata']['quality_score']
+            }
+        }
+        await self.ui_queue.put(ui_payload)
+        
+        # Notify Navigator-Pipeline of completion
+        pipeline_payload = {
+            'agent': 'navigator-pipeline',
+            'event': 'content_processed',
+            'content_id': content['content_id'],
+            'status': 'success',
+            'metrics': {
+                'processing_time': content['metadata']['processing_time'],
+                'quality_score': content['metadata']['quality_score'],
+                'strategic_importance': content['metadata']['strategic_importance']
+            }
+        }
+        await self.pipeline_queue.put(pipeline_payload)
+```
+
+## ⚡ Performance Optimization & Monitoring
+
+### Connection Pooling & Resource Management
+```python
+class ResourceManager:
+    def __init__(self):
+        # HTTP session with connection pooling
+        self.http_session = aiohttp.ClientSession(
+            timeout=aiohttp.ClientTimeout(total=300),
+            connector=aiohttp.TCPConnector(
+                limit=100,
+                limit_per_host=20,
+                ttl_dns_cache=300,
+                use_dns_cache=True
+            )
+        )
+        
+        # Rate limiting for API calls
+        self.runpod_limiter = asyncio.Semaphore(
+            int(os.getenv('MAX_CONCURRENT_JOBS', 5))
+        )
+    
+    async def cleanup(self):
+        """Clean up resources."""
+        await self.http_session.close()
+```
+
+### Metrics Collection
+```python
+class MetricsCollector:
+    def __init__(self):
+        self.metrics = {
+            'content_discovered': 0,
+            'audio_downloaded': 0,
+            'transcription_jobs_submitted': 0,
+            'transcription_jobs_completed': 0,
+            'transcription_jobs_failed': 0,
+            'total_processing_time': 0,
+            'average_quality_score': 0
+        }
+    
+    async def collect_performance_metrics(self) -> dict:
+        """Collect current performance metrics."""
+        return {
+            'ingestion_throughput': self.calculate_items_per_hour(),
+            'transcription_latency': self.calculate_avg_transcription_time(),
+            'error_rate': self.calculate_error_percentage(),
+            'quality_score': self.metrics['average_quality_score'],
+            'active_jobs': len(self.active_jobs),
+            'queue_depths': {
+                'discovery': content_discovery_queue.qsize(),
+                'audio_processing': audio_processing_queue.qsize(),
+                'transcription': transcription_queue.qsize(),
+                'assembly': transcript_assembly_queue.qsize()
+            },
+            'cost_metrics': {
+                'daily_transcription_cost': self.estimate_daily_cost(),
+                'cost_per_minute': self.calculate_cost_efficiency()
+            }
+        }
+```
+
+## 🚨 Error Handling & Recovery
+
+### Comprehensive Error Handling
+```python
+async def retry_with_exponential_backoff(
+    func,
+    max_retries=3,
+    base_delay=1,
+    max_delay=60,
+    exceptions=(Exception,)
+):
+    """Retry function with exponential backoff."""
+    for attempt in range(max_retries + 1):
+        try:
+            return await func()
+        except exceptions as e:
+            if attempt == max_retries:
+                raise e
+            
+            delay = min(base_delay * (2 ** attempt), max_delay)
+            logger.warning(f"Attempt {attempt + 1} failed, retrying in {delay}s: {e}")
+            await asyncio.sleep(delay)
+```
+
+## 🎯 Integration Checklist
+
+### Pre-Production Validation
+- [ ] **Authentication**: RUNPOD_API_KEY configured and tested
+- [ ] **Webhooks**: Webhook endpoint configured for job completion
+- [ ] **Error Handling**: All error scenarios tested and handled
+- [ ] **Rate Limiting**: Concurrent job limits configured appropriately
+- [ ] **Monitoring**: Metrics collection and alerting configured
+- [ ] **Storage**: Temporary file cleanup automated
+- [ ] **Recovery**: Dead letter queues for failed jobs
+- [ ] **Testing**: End-to-end workflow tested with real content
+
+### Performance Validation
+- [ ] **Latency**: Content processed within target SLA (< 10 minutes)
+- [ ] **Throughput**: Target items/hour achieved (>= 10 items/hour)
+- [ ] **Quality**: Transcription accuracy meets standards (>= 85%)
+- [ ] **Cost**: Operating within budget constraints
+- [ ] **Reliability**: Error rate below 5%
+
+---
+
+## 🚀 Implementation Path
+
+This comprehensive workflow should be implemented **progressively over multiple sprints**:
+
+1. **Sprint 1-2**: Basic RSS monitoring and content discovery
+2. **Sprint 3-4**: Audio download and chunking pipeline  
+3. **Sprint 5-6**: RunPod integration and transcription
+4. **Sprint 7-8**: Transcript assembly and enrichment
+5. **Sprint 9-10**: Downstream delivery and monitoring
+
+**Your blueprint for world-class asynchronous content ingestion!** 🎯
