@@ -1,18 +1,13 @@
-import sys
-from pathlib import Path
-
-# Add the parent directory to the path for imports
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-
 from rss_parser import RSSParser
 
 
 def test_rss_parser_extracts_audio_urls():
-    xml_path = Path(__file__).resolve().parents[3] / "libs" / "common-utils" / "fixtures" / "shift_key_rss.xml"
-    xml_content = xml_path.read_text()
+    xml_content = """<rss><channel>\n" + \
+        "<item><enclosure url='a.mp3'/></item>\n" + \
+        "<item><enclosure url='b.mp3'/></item>\n" + \
+        "</channel></rss>"""
 
     parser = RSSParser()
     urls = parser.extract_audio_urls(xml_content)
 
-    assert len(urls) == 70
-    assert all(url.endswith(".mp3") for url in urls)
+    assert urls == ["a.mp3", "b.mp3"]

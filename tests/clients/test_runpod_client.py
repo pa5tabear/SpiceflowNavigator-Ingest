@@ -1,11 +1,13 @@
 import sys
 from pathlib import Path
+
 import pytest
 
-# Add the libs directory to the path for imports
-sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "libs" / "common-utils"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
-from runpod_client import RunPodClient
+
+from auth.runpod_client import RunPodClient
+from config.environment import Environment
 
 
 class DummyClient:
@@ -29,7 +31,7 @@ def test_init_from_env(monkeypatch):
     dummy = DummyClient("http://api")
     monkeypatch.setenv("RUNPOD_ENDPOINT", "http://api")
     monkeypatch.setattr(
-        "runpod_client.Client", lambda endpoint, timeout=300: dummy
+        "auth.runpod_client.Client", lambda endpoint, timeout=300: dummy
     )
     client = RunPodClient()
     assert client.endpoint == "http://api"
@@ -39,7 +41,7 @@ def test_init_from_env(monkeypatch):
 def test_transcribe_calls_predict(monkeypatch):
     dummy = DummyClient("http://api")
     monkeypatch.setattr(
-        "runpod_client.Client", lambda endpoint, timeout=300: dummy
+        "auth.runpod_client.Client", lambda endpoint, timeout=300: dummy
     )
     client = RunPodClient("http://api")
     result = client.transcribe("file.wav", stream=True)
@@ -50,3 +52,11 @@ def test_transcribe_calls_predict(monkeypatch):
             {"stream": True, "api_name": "/predict"},
         )
     ]
+
+
+def test_environment_load(monkeypatch):
+    monkeypatch.setenv("RUNPOD_ENDPOINT", "http://api")
+    monkeypatch.setenv("RUNPOD_API_KEY", "secret")
+    env = Environment.load()
+    assert env.runpod_endpoint == "http://api"
+    assert env.runpod_api_key == "secret"
