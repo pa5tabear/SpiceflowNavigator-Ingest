@@ -3,7 +3,15 @@ from __future__ import annotations
 import os
 from typing import Optional
 
-from gradio_client import Client
+try:
+    from gradio_client import Client  # type: ignore
+except Exception:  # pragma: no cover - optional dep
+
+    class Client:  # type: ignore
+        """Fallback client if gradio_client is unavailable."""
+
+        def __init__(self, *args, **kwargs) -> None:  # pragma: no cover
+            raise ImportError("gradio_client is required")
 
 
 class RunPodClient:
