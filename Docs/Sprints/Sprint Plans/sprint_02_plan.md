@@ -42,7 +42,7 @@ Max 3 tasks; anything larger ⇒ refuse & ask to split next sprint.
 |---|------------------------|-----------------------------------|
 | 1 | Fix CI blocker and establish working pipeline | pytest -k test_.* green; .gitmodules fixed, CI badge green, basic test structure working |
 | 2 | Implement async workflow foundation with queue architecture | Core async queues created (discovery, processing, assembly, delivery); pytest validates queue operations |
-| 3 | Create RunPod authentication framework and workflow skeleton | Environment config structure, auth framework, workflow orchestrator class with queue management |
+| 3 | Implement missing RunPod client with async authentication framework | Create runpod_client.py with API key handling, async operations, environment config validation |
 
 ## 3 · Interfaces Changed / Added
 *(append only; one row per file or endpoint)*
@@ -52,7 +52,7 @@ Max 3 tasks; anything larger ⇒ refuse & ask to split next sprint.
 | `.gitmodules` | Remove broken submodule reference | Git submodule commands → No 404 errors |
 | `core/workflow_orchestrator.py` | New async workflow orchestrator | Queue management → Coordinated pipeline execution |
 | `core/queue_manager.py` | Async queue architecture foundation | Event routing → Multi-stage processing pipeline |
-| `auth/runpod_client.py` | RunPod authentication framework | API credentials → Authenticated RunPod integration |
+| `runpod_client.py` | Missing RunPod client implementation | Audio files + API key → Async transcription results |
 | `config/environment.py` | Environment configuration system | Env vars → Structured config for all components |
 | `tests/test_async_workflow.py` | Async workflow and queue tests | pytest → Queue operations and workflow validated |
 
