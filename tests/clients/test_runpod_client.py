@@ -40,6 +40,16 @@ def test_init_from_env(monkeypatch):
     assert client.client is dummy
 
 
+def test_init_override_no_env(monkeypatch):
+    dummy = DummyClient("http://api")
+    monkeypatch.delenv("RUNPOD_ENDPOINT", raising=False)
+    monkeypatch.setattr(
+        "auth.runpod_client.Client", lambda endpoint, timeout=300: dummy
+    )
+    client = RunPodClient("http://api")
+    assert client.endpoint == "http://api"
+
+
 def test_transcribe_calls_predict(monkeypatch):
     dummy = DummyClient("http://api")
     monkeypatch.setattr(
